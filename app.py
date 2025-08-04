@@ -3,7 +3,7 @@
 #
 # --- 运行前准备 ---
 # 1. 安装必要的库 (在终端或命令行中运行):
-#    pip install Flask Flask-Cors supabase-py python-dotenv gunicorn
+#    pip install Flask Flask-Cors supabase python-dotenv gunicorn
 #
 # 2. 创建 .env 文件:
 #    在与此 app.py 文件相同的目录下创建一个名为 .env 的文件。
@@ -179,14 +179,19 @@ def reagent_out():
     """处理试剂出库"""
     data = request.json
     try:
-        # 1. 找到对应的批次
-        # 注意: 前端需要传递reagent_id来精确定位批次
-        batch_res = supabase.table('reagent_batches').select('id, total_tests').eq('batch_no', data['batchNo']).eq('reagent_id', data['reagentId']).execute()
+        # --- BUG修复 START ---
+        # 旧逻辑: 使用批号和试剂ID查找，无法区分相同批号但效期不同的库存
+        # batch_res = supabase.table('reagent_batches').select('id, total_tests').eq('batch_no', data['batchNo']).eq('reagent_id', data['reagentId']).execute()
+
+        # 新逻辑: 使用唯一的 batchId (批次ID) 来精确定位要出库的库存条目
+        batch_id = data['batchId']
+        batch_res = supabase.table('reagent_batches').select('id, total_tests').eq('id', batch_id).single().execute()
+        # --- BUG修复 END ---
 
         if not batch_res.data:
             return jsonify({'error': '批次未找到'}), 404
         
-        batch = batch_res.data[0]
+        batch = batch_res.data
         amount_out = int(data['amount'])
 
         if amount_out <= 0 or amount_out > batch['total_tests']:
@@ -314,3 +319,4 @@ if __name__ == '__main__':
     # 启动Flask Web服务器
     # debug=True 会在代码变动后自动重启服务，方便开发，但在生产环境应设为False
     app.run(debug=True, port=5000)
+
