@@ -1,0 +1,5 @@
+Flask
+Flask-Cors
+supabase-py
+python-dotenv
+gunicorn
