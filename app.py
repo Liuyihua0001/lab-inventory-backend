@@ -122,25 +122,22 @@ def reagent_in():
     """处理试剂入库请求"""
     data = request.json
     try:
-        # 1. 查找或创建试剂主条目
-        reagent_res = supabase.table('reagents').select('id').eq('name', data['name']).execute()
+        # --- 核心BUG修复 ---
+        # 新逻辑: 使用 "名称" 和 "货号" 共同作为唯一标识来查找试剂
+        reagent_res = supabase.table('reagents').select('id').eq('name', data['name']).eq('article_no', data['articleNo']).execute()
         reagent_id = None
+        
         if reagent_res.data:
+            # 如果 "名称+货号" 的组合已存在，则获取其ID
             reagent_id = reagent_res.data[0]['id']
-            # --- BUG修复 START ---
-            # 旧逻辑: 只更新分类
-            # supabase.table('reagents').update({'category': data.get('category', '未分类')}).eq('id', reagent_id).execute()
-            
-            # 新逻辑: 完整更新试剂的基础信息 (货号、制造商、分类)
+            # 并且只更新那些非关键标识的信息，如制造商和分类
             update_payload = {
-                'article_no': data['articleNo'],
                 'manufacturer': data['manufacturer'],
                 'category': data.get('category', '未分类')
             }
             supabase.table('reagents').update(update_payload).eq('id', reagent_id).execute()
-            # --- BUG修复 END ---
         else:
-            # 如果试剂不存在，创建新的试剂条目
+            # 如果 "名称+货号" 的组合是新的，则创建一个全新的试剂条目
             new_reagent = supabase.table('reagents').insert({
                 'name': data['name'],
                 'article_no': data['articleNo'],
@@ -149,7 +146,7 @@ def reagent_in():
             }).execute()
             reagent_id = new_reagent.data[0]['id']
 
-        # 2. 智能批次处理
+        # 2. 智能批次处理 (这部分逻辑是正确的，无需修改)
         batch_details = data['batchDetails']
         
         # 查找是否存在属性完全匹配的现有批次
