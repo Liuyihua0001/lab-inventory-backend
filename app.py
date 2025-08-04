@@ -56,12 +56,10 @@ def get_dashboard_data():
         records_res = supabase.table('records').select('*').order('time', desc=True).limit(5).execute()
         
         # 2. 获取临近过期的试剂批次 (30天内)
-        # 计算30天后的日期
         warning_days = 30
         today = datetime.now().date()
         thirty_days_later = today + timedelta(days=warning_days)
         
-        # 查询有效期在今天和30天后之间的批次
         expiring_batches_res = supabase.table('reagent_batches').select('*, reagents(name)') \
             .gte('exp_date', today.isoformat()) \
             .lte('exp_date', thirty_days_later.isoformat()) \
@@ -77,12 +75,11 @@ def get_dashboard_data():
                 'daysLeft': days_left
             })
         
-        # 按剩余天数升序排序
         expiring_soon.sort(key=lambda x: x['daysLeft'])
 
         return jsonify({
             'recentRecords': records_res.data,
-            'expiringSoon': expiring_soon[:5] # 只返回前5个
+            'expiringSoon': expiring_soon[:5]
         })
     except Exception as e:
         return jsonify({'error': f"获取总控面板数据失败: {e}"}), 500
@@ -91,7 +88,6 @@ def get_dashboard_data():
 def get_reagents():
     """获取所有试剂及其所有批次信息"""
     try:
-        # 使用嵌套查询一次性获取试剂和其所有批次 (reagent_batches)
         response = supabase.table('reagents').select('*, reagent_batches(*)').order('name').execute()
         return jsonify(response.data)
     except Exception as e:
@@ -101,7 +97,6 @@ def get_reagents():
 def get_equipment():
     """获取所有设备及其所有维护记录"""
     try:
-        # 使用嵌套查询一次性获取设备和其所有维护记录 (maintenance_logs)
         response = supabase.table('equipment').select('*, maintenance_logs(*)').order('created_at', desc=True).execute()
         return jsonify(response.data)
     except Exception as e:
@@ -111,7 +106,6 @@ def get_equipment():
 def get_records():
     """获取所有操作记录"""
     try:
-        # 实际应用中可以根据前端传来的参数进行筛选和分页
         response = supabase.table('records').select('*').order('time', desc=True).execute()
         return jsonify(response.data)
     except Exception as e:
@@ -122,35 +116,41 @@ def reagent_in():
     """处理试剂入库请求"""
     data = request.json
     try:
-        # --- 核心BUG修复 ---
-        # 新逻辑: 使用 "名称" 和 "货号" 共同作为唯一标识来查找试剂
-        reagent_res = supabase.table('reagents').select('id').eq('name', data['name']).eq('article_no', data['articleNo']).execute()
+        # --- 核心逻辑修正 ---
+        # 1. 查找或创建试剂主条目 (现在只按名称查找)
+        reagent_res = supabase.table('reagents').select('id').eq('name', data['name']).execute()
         reagent_id = None
         
         if reagent_res.data:
-            # 如果 "名称+货号" 的组合已存在，则获取其ID
             reagent_id = reagent_res.data[0]['id']
-            # 并且只更新那些非关键标识的信息，如制造商和分类
-            update_payload = {
+            # 更新非关键信息，如制造商和分类
+            supabase.table('reagents').update({
                 'manufacturer': data['manufacturer'],
                 'category': data.get('category', '未分类')
-            }
-            supabase.table('reagents').update(update_payload).eq('id', reagent_id).execute()
+            }).eq('id', reagent_id).execute()
         else:
-            # 如果 "名称+货号" 的组合是新的，则创建一个全新的试剂条目
+            # 创建全新的试剂条目
             new_reagent = supabase.table('reagents').insert({
                 'name': data['name'],
-                'article_no': data['articleNo'],
                 'manufacturer': data['manufacturer'],
                 'category': data.get('category', '未分类')
             }).execute()
             reagent_id = new_reagent.data[0]['id']
 
-        # 2. 智能批次处理 (这部分逻辑是正确的，无需修改)
+        # 2. 智能批次处理
         batch_details = data['batchDetails']
         
-        # 查找是否存在属性完全匹配的现有批次
-        existing_batch_res = supabase.table('reagent_batches').select('id, total_tests').eq('reagent_id', reagent_id).eq('batch_no', batch_details['batchNo']).eq('prod_date', batch_details['prodDate']).eq('exp_date', batch_details['expDate']).eq('tests_per_unit', batch_details['testsPerUnit']).eq('location', batch_details['location']).eq('temp', batch_details['temp']).execute()
+        # 查找是否存在属性完全匹配的现有批次 (现在包含货号)
+        existing_batch_res = supabase.table('reagent_batches').select('id, total_tests') \
+            .eq('reagent_id', reagent_id) \
+            .eq('batch_no', batch_details['batchNo']) \
+            .eq('article_no', batch_details['articleNo']) \
+            .eq('prod_date', batch_details['prodDate']) \
+            .eq('exp_date', batch_details['expDate']) \
+            .eq('tests_per_unit', batch_details['testsPerUnit']) \
+            .eq('location', batch_details['location']) \
+            .eq('temp', batch_details['temp']) \
+            .execute()
         
         total_in = data['qty'] * batch_details['testsPerUnit']
 
@@ -161,10 +161,11 @@ def reagent_in():
             supabase.table('reagent_batches').update({'total_tests': new_total}).eq('id', existing_batch['id']).execute()
             log_notes = f"合并入库 {data['qty']} 盒"
         else:
-            # 如果没找到，创建新批次
+            # 如果没找到，创建新批次 (现在包含货号)
             supabase.table('reagent_batches').insert({
                 'reagent_id': reagent_id,
                 'batch_no': batch_details['batchNo'],
+                'article_no': batch_details['articleNo'],
                 'prod_date': batch_details['prodDate'],
                 'exp_date': batch_details['expDate'],
                 'total_tests': total_in,
